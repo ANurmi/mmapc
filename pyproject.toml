@@ -1,0 +1,30 @@
+[project]
+name = "mmapc"
+version = "0.1.0"
+description = "Memory map compiler"
+requires-python = ">=3.11"
+dependencies = ["pyyaml>=6.0"]
+
+[project.scripts]
+mmapc = "mmapc_src.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6", "pyslang>=8"]
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# The `mmapc_src` package lives at the repo root; src/ holds the memory map sources.
+module-root = ""
+module-name = "mmapc_src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
