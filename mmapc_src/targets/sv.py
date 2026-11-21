@@ -1,10 +1,11 @@
 """SystemVerilog target: a single `<name>_address_map_pkg` package.
 
 For each region the package has:
-- an `addr_rule_t` localparam `<Id>Addr = '{base, last}` (`last` is the inclusive last
-  address; open-ended regions run to the top of the address space, so an exclusive end
-  could not be represented in AddrWidth bits);
-- if it has children, a packed struct type `<id>_map_t` {base, last, num, <child>...}
+- an `addr_rule_t` localparam `<Id>Addr = '{start_addr, end_addr}`, following the PULP
+  AXI rule naming. `end_addr` is exclusive (start + size). A region reaching the top of
+  the address space has an end of 2**AddrWidth, which truncates to `end_addr = 0`;
+- if it has children, a packed struct type `<id>_map_t`
+  {start_addr, end_addr, num, <child>...}
   and a localparam `<Id>Map`, where a leaf child is an `addr_rule_t` and a parent child
   is its own `<child>_map_t`.
 The top-level `addr_map_t` / `AddressMap` holds `num` and the top-level regions.
@@ -55,7 +56,7 @@ SV_KEYWORDS = frozenset(
 )
 
 # Field names every `<id>_map_t` already has.
-_MAP_FIELDS = ("base", "last", "num")
+_MAP_FIELDS = ("start_addr", "end_addr", "num")
 
 
 def camel(rid: str) -> str:
@@ -179,9 +180,9 @@ def generate(mm: MemoryMap, diags: Diagnostics, opts: TargetOptions) -> dict[Pur
         f"  localparam int unsigned AddrWidth = {bits};",
         "",
     ]
-    lines += _struct("addr_rule_t", [(addr_t, "base"), (addr_t, "last")])
+    lines += _struct("addr_rule_t", [(addr_t, "start_addr"), (addr_t, "end_addr")])
     for p in parents:
-        fields = [(addr_t, "base"), (addr_t, "last"), ("int unsigned", "num")]
+        fields = [(addr_t, "start_addr"), (addr_t, "end_addr"), ("int unsigned", "num")]
         fields += [(field_type(c), c.id) for c in p.children]
         lines += _struct(f"{p.id}_map_t", fields)
     lines += _struct(
@@ -191,17 +192,25 @@ def generate(mm: MemoryMap, diags: Diagnostics, opts: TargetOptions) -> dict[Pur
     regions = list(mm.walk())
     if regions:
         name_w = max(len(f"{camel(r.id)}Addr") for r in regions)
+        space_end = 1 << bits
         for r in regions:
-            rule = f"'{{base: {sv_hex(r.start, bits)}, last: {sv_hex(r.end - 1, bits)}}}"
+            # Exclusive end; 2**AddrWidth does not fit and truncates to 0.
+            end = r.end % space_end
+            rule = f"'{{start_addr: {sv_hex(r.start, bits)}, end_addr: {sv_hex(end, bits)}}}"
+            note = " (end_addr 0: extends to the top of the address space)" if end == 0 else ""
             lines.append(
                 f"  localparam addr_rule_t {camel(r.id) + 'Addr':<{name_w}} = {rule};"
-                f"  // {_comment(r.name)}"
+                f"  // {_comment(r.name)}{note}"
             )
         lines.append("")
 
     for p in parents:
         addr = f"{camel(p.id)}Addr"
-        items = [("base", f"{addr}.base"), ("last", f"{addr}.last"), ("num", str(len(p.children)))]
+        items = [
+            ("start_addr", f"{addr}.start_addr"),
+            ("end_addr", f"{addr}.end_addr"),
+            ("num", str(len(p.children))),
+        ]
         items += [(c.id, field_value(c)) for c in p.children]
         lines += _assign(f"{p.id}_map_t", f"{camel(p.id)}Map", items)
     lines += _assign(

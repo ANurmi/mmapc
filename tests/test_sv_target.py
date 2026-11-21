@@ -76,13 +76,20 @@ def test_repo_package_structure():
     assert "  localparam int unsigned AddrWidth = 32;" in text
     # Child types precede the top-level map type, in source order.
     assert text.index("} periph_map_t;") < text.index("} core_map_t;") < text.index("} addr_map_t;")
-    # `last` is inclusive.
+    # PULP-style rule fields; `end_addr` is exclusive.
+    assert "    logic [AddrWidth-1:0] start_addr;\n    logic [AddrWidth-1:0] end_addr;\n" in text
+    assert "base" not in text and "last" not in text
     assert (
         "  localparam addr_rule_t UartAddr    = "
-        "'{base: 32'h0003_3000, last: 32'h0003_3007};  // UART"
+        "'{start_addr: 32'h0003_3000, end_addr: 32'h0003_3008};  // UART"
     ) in text
-    assert "last: 32'hFFFF_FFFF};  // External Address Space" in text
-    assert "    num:    8,\n" in text
+    # Open-ended region reaching the top of the 32-bit space: end truncates to 0.
+    assert (
+        "'{start_addr: 32'h0011_0000, end_addr: 32'h0000_0000};  // External Address Space "
+        "(end_addr 0: extends to the top of the address space)"
+    ) in text
+    assert "    start_addr: PeriphAddr.start_addr,\n    end_addr:   PeriphAddr.end_addr,\n" in text
+    assert "    num:        8,\n" in text
     assert "    num:     6,\n" in text
 
 
@@ -94,10 +101,12 @@ def test_repo_package_elaborates_with_correct_values():
           import zeroheti_address_map_pkg::*;
           if (AddressMap.num != 6) $error("num");
           if (AddressMap.periph.num != 8) $error("periph num");
-          if (AddressMap.periph.spi.base != 32'h0003_5000) $error("spi base");
-          if (AddressMap.periph.spi.last != 32'h0003_50FF) $error("spi last");
-          if (AddressMap.core.base != 0 || AddressMap.core.last != 32'h0002_FFFF) $error("core");
-          if (AddressMap.ext.last != 32'hFFFF_FFFF) $error("ext");
+          if (AddressMap.periph.spi.start_addr != 32'h0003_5000) $error("spi start");
+          if (AddressMap.periph.spi.end_addr != 32'h0003_5100) $error("spi end");
+          if (AddressMap.periph.end_addr != 32'h000B_3000) $error("periph end");
+          if (AddressMap.core.start_addr != 0 || AddressMap.core.end_addr != 32'h0003_0000)
+            $error("core");
+          if (AddressMap.ext.end_addr != 0) $error("ext");
           if (CoreMap.dmem != DmemAddr) $error("dmem");
           if ($bits(addr_rule_t) != 2 * AddrWidth) $error("rule width");
         endmodule
@@ -142,14 +151,14 @@ def test_deep_nesting_elaborates(tmp_path):
     text = next(iter(out.values()))
     assert text.index("} b_map_t;") < text.index("} a_map_t;")
     assert "    b_map_t               b;" in text
-    assert "    b:    BMap," in text
+    assert "    b:          BMap," in text
     checker = dedent(
         """\
         module check;
           import soc_address_map_pkg::*;
-          if (AddressMap.a.b.c.base != 16'h0010) $error("c base");
-          if (AddressMap.a.b.c.last != 16'h001F) $error("c last");
-          if (AddressMap.a.d.last != 16'h0803) $error("d last");
+          if (AddressMap.a.b.c.start_addr != 16'h0010) $error("c start");
+          if (AddressMap.a.b.c.end_addr != 16'h0020) $error("c end");
+          if (AddressMap.a.d.end_addr != 16'h0804) $error("d end");
           if (AddressMap.a.num != 2 || AddressMap.a.b.num != 1) $error("num");
         endmodule
         """
@@ -182,7 +191,7 @@ def test_child_named_like_map_field(tmp_path):
               start: 0
               size: 0x100
               children:
-                - { id: base, name: B, start: 0, size: 4 }
+                - { id: end_addr, name: B, start: 0, size: 4 }
             """,
         )
     )
@@ -244,3 +253,22 @@ def test_cli_sv_and_lint_only_are_exclusive():
     with pytest.raises(SystemExit) as exc:
         main(["-l", "-t", "sv", str(REPO_SRC / "top.yml")])
     assert exc.value.code == 2
+
+
+def test_open_ended_child_ending_below_top_keeps_exclusive_end(tmp_path):
+    out, _ = generate(
+        write(
+            tmp_path,
+            """\
+            - id: p
+              name: P
+              start: 0x1000
+              size: 0x1000
+              children:
+                - { id: rest, name: Rest, start: 0x1800 }
+            """,
+            bits=16,
+        )
+    )
+    text = next(iter(out.values()))
+    assert "'{start_addr: 16'h1800, end_addr: 16'h2000};  // Rest\n" in text
