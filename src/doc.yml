@@ -1,0 +1,32 @@
+# memmap directives for the doc target. Not a memory map source: top.yml doesn't include it.
+#
+#   uv run mmapc -t doc -n zeroheti -d src/doc.yml src/top.yml
+#   uv run memmap render build/zeroheti_memmap.yaml -o zeroheti.svg
+#
+# figure, view and style are merged over mmapc's defaults (a list replaces the default) and
+# passed to memmap unchecked; `uv run memmap schema` lists every key.
+
+figure:
+  title: zeroHETI address map
+  legend: true                  # explain the shaded unmapped areas
+
+view:
+  # Default: zoom into every region with children. Listed here to show the order is yours.
+  expand: [core, periph]
+  defaults:
+    labels:
+      size: true                # print each region's size under its name
+
+style:
+  palette: datasheet
+  reserved: { show_label: true, label: Unmapped }
+
+# memmap memory options; only check_alignment and fill_gaps are allowed.
+memory:
+  check_alignment: false
+
+# Per-region display tweaks, keyed by mmapc region id. Only name, color, note, kind and
+# sectors are allowed; start, size and children always come from the sources.
+regions:
+  bootrom: { color: "#ffe0b0", note: Read-only }
+  ext:     { name: "External\nAddress Space" }

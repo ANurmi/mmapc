@@ -34,7 +34,7 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     gen_diags = Diagnostics()
-    opts = TargetOptions(name=args.name or args.source.stem)
+    opts = TargetOptions(name=args.name or args.source.stem, directives=args.directives)
     outputs = TARGETS[args.target](mm, gen_diags, opts)
     _report(gen_diags)
     if gen_diags.errors:
@@ -65,7 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--target",
         choices=sorted(TARGETS),
         help="generate artifacts for TARGET (c: C headers, one per source file; "
-        "sv: SystemVerilog <NAME>_address_map_pkg)",
+        "sv: SystemVerilog <NAME>_address_map_pkg; "
+        "doc: <NAME>_memmap.yaml config for the memmap drawing tool)",
     )
     parser.add_argument(
         "-o",
@@ -81,6 +82,14 @@ def build_parser() -> argparse.ArgumentParser:
         "<NAME>_address_map_pkg (default: source file stem)",
     )
     parser.add_argument(
+        "-d",
+        "--directives",
+        type=Path,
+        metavar="FILE",
+        help="YAML file of memmap-specific settings (figure, view, style, memory, "
+        "regions) for the doc target",
+    )
+    parser.add_argument(
         "-q",
         "--quiet",
         action="store_true",
@@ -91,7 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    return run(build_parser().parse_args(argv))
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.directives is not None and args.target != "doc":
+        parser.error("argument -d/--directives: only allowed with -t doc")
+    return run(args)
 
 
 if __name__ == "__main__":

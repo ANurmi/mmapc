@@ -13,7 +13,7 @@ uv sync
 ## Usage
 
 ```
-mmapc [-l | -t {c,sv}] [-o OUTPUT_DIR] [-n NAME] [-q] [--werror] source
+mmapc [-l | -t {c,sv,doc}] [-o OUTPUT_DIR] [-n NAME] [-d FILE] [-q] [--werror] source
 ```
 
 Every run lints the sources first. If there are errors, mmapc prints them as `file:line:col` messages, exits with status 1 and writes nothing.
@@ -22,14 +22,16 @@ Every run lints the sources first. If there are errors, mmapc prints them as `fi
 uv run mmapc -l src/top.yml                  # lint and print the resolved memory map
 uv run mmapc -t c src/top.yml                # C headers: build/top.h, build/core.h, ...
 uv run mmapc -t sv -n soc src/top.yml        # SystemVerilog: build/soc_address_map_pkg.sv
+uv run mmapc -t doc src/top.yml              # memmap drawing config: build/top_memmap.yaml
 ```
 
 | Option | Meaning |
 | --- | --- |
 | `-l`, `--lint-only` | Only check the sources and print the map. This is also what happens when `-t` isn't given. |
-| `-t`, `--target {c,sv}` | Generate artifacts instead of printing the map. Can't be combined with `-l`. |
+| `-t`, `--target {c,sv,doc}` | Generate artifacts instead of printing the map. Can't be combined with `-l`. |
 | `-o`, `--output-dir DIR` | Where generated files go (default: `build`). |
 | `-n`, `--name NAME` | Design name used to name artifacts (default: the source file's name without extension). |
+| `-d`, `--directives FILE` | memmap settings for the `doc` target (see below). Only allowed with `-t doc`. |
 | `-q`, `--quiet` | Don't print the map or the list of written files. |
 | `--werror` | Treat warnings as errors. |
 
@@ -65,6 +67,36 @@ regions:
 
 - **`c`**: one header per source file, with `#include`s mirroring the source includes. Each region gets a `<ID>_BASE` macro, e.g. `#define UART_BASE 0x00033000UL`.
 - **`sv`**: a single `<NAME>_address_map_pkg` package. Each region gets an `addr_rule_t` localparam `{start_addr, end_addr}`, and regions with children also get nested `<id>_map_t` structs. These all combine into the top-level `AddressMap`. `end_addr` is exclusive. For a region that reaches the top of the address space, it wraps to `0`.
+
+- **`doc`**: a single `<NAME>_memmap.yaml` config for [memmap](https://github.com/iharhl/memmap), which draws datasheet-style memory map images. Every region gets an explicit `start` and `size`. By default the drawing has the title `<NAME> memory map` and zooms into every region with children. Render it with:
+
+  ```sh
+  memmap render build/top_memmap.yaml -o top.svg   # or .png/.pdf with memmap[raster]
+  ```
+
+  memmap is a dev dependency, so `uv run memmap ...` works after `uv sync`.
+
+### memmap directives (`-d`)
+
+Settings that only matter for the drawing go in a separate YAML file, so the memory map sources stay tool-neutral:
+
+```yaml
+figure: { title: zeroHETI address map, footer: ZH-MM-1, legend: true }
+view:                                   # e.g. which regions to zoom into, labels, scale
+  expand: [periph]
+  defaults: { labels: { size: true } }
+style: { palette: datasheet }
+memory: { check_alignment: true }       # only check_alignment, fill_gaps
+regions:                                # keyed by mmapc region id
+  bootrom: { color: "#ffe0b0", note: Read-only }
+  ext:     { name: "External\nAddress Space" }   # only name, color, note, kind, sectors
+```
+
+```sh
+uv run mmapc -t doc -n zeroheti -d src/doc.yml src/top.yml   # src/doc.yml is a commented example
+```
+
+`figure`, `view` and `style` are merged over the defaults: mappings merge key by key, and anything else (including lists like `view.expand`) replaces the default. Their contents are passed through as-is and memmap checks them; run `memmap schema` for every key. `memory` and `regions` can't change where regions are, so the drawing always matches the sources. mmapc reports unknown keys and region ids in the directives file as errors and writes nothing.
 
 ## Development
 
