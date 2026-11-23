@@ -13,7 +13,7 @@ uv sync
 ## Usage
 
 ```
-mmapc [-l | -t {c,sv,doc}] [-o OUTPUT_DIR] [-n NAME] [-d FILE] [-q] [--werror] source
+mmapc [-l | -t {c,sv,doc,md}] [-o OUTPUT_DIR] [-n NAME] [-d FILE] [-q] [--werror] source
 ```
 
 Every run lints the sources first. If there are errors, mmapc prints them as `file:line:col` messages, exits with status 1 and writes nothing.
@@ -23,12 +23,13 @@ uv run mmapc -l src/top.yml                  # lint and print the resolved memor
 uv run mmapc -t c src/top.yml                # C headers: build/top.h, build/core.h, ...
 uv run mmapc -t sv -n soc src/top.yml        # SystemVerilog: build/soc_address_map_pkg.sv
 uv run mmapc -t doc src/top.yml              # memmap drawing config: build/top_memmap.yaml
+uv run mmapc -t md src/top.yml               # Markdown tables: build/top_memory_map.md
 ```
 
 | Option | Meaning |
 | --- | --- |
 | `-l`, `--lint-only` | Only check the sources and print the map. This is also what happens when `-t` isn't given. |
-| `-t`, `--target {c,sv,doc}` | Generate artifacts instead of printing the map. Can't be combined with `-l`. |
+| `-t`, `--target {c,sv,doc,md}` | Generate artifacts instead of printing the map. Can't be combined with `-l`. |
 | `-o`, `--output-dir DIR` | Where generated files go (default: `build`). |
 | `-n`, `--name NAME` | Design name used to name artifacts (default: the source file's name without extension). |
 | `-d`, `--directives FILE` | memmap settings for the `doc` target (see below). Only allowed with `-t doc`. |
@@ -75,6 +76,8 @@ regions:
   ```
 
   memmap is a dev dependency, so `uv run memmap ...` works after `uv sync`.
+
+- **`md`**: a single `<NAME>_memory_map.md` with GitHub-flavored Markdown tables (name, id, start, inclusive end, size): one for the top-level regions, then a section with a table of children for each region that has them. Siblings are in address order, as in `mmapc -l`.
 
 ### memmap directives (`-d`)
 

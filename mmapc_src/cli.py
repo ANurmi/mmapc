@@ -66,7 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(TARGETS),
         help="generate artifacts for TARGET (c: C headers, one per source file; "
         "sv: SystemVerilog <NAME>_address_map_pkg; "
-        "doc: <NAME>_memmap.yaml config for the memmap drawing tool)",
+        "doc: <NAME>_memmap.yaml config for the memmap drawing tool; "
+        "md: <NAME>_memory_map.md Markdown tables)",
     )
     parser.add_argument(
         "-o",
