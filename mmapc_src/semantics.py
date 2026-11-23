@@ -1,7 +1,9 @@
 """Semantic phase: address-space layout checks on a loaded MemoryMap.
 
 Also resolves each region's exclusive `end` address (open-ended regions, i.e. those
-without `size`, extend to the end of their parent or of the address space).
+without `size`, extend to the end of their parent or of the address space), and the
+`start` of children that omit it: such a child is placed right after its preceding
+sibling in source order, or at its parent's start if it is the first child.
 """
 
 from __future__ import annotations
@@ -33,11 +35,22 @@ class _Analyzer:
             if parent
             else f"the {self.mm.address_bits}-bit address space"
         )
+        cursor: int | None = lo  # end of the previous sibling, in source order
+        prev: Region | None = None
         for r in regions:
+            how = ""
+            if r.implicit_start:
+                if cursor is None:
+                    # The previous sibling could not be placed (already reported).
+                    prev = r
+                    continue
+                r.start = cursor
+                how = f" (implicitly, after '{prev.id}')" if prev else " (implicitly)"
+            prev, cursor = r, None
             if not lo <= r.start < hi:
                 self.diags.error(
                     "out-of-bounds",
-                    f"region '{r.id}' starts at {self.hex(r.start)}, outside {container}",
+                    f"region '{r.id}' starts at {self.hex(r.start)}{how}, outside {container}",
                     r.at("start"),
                 )
                 continue
@@ -51,10 +64,12 @@ class _Analyzer:
                 if r.end > hi:
                     self.diags.error(
                         "out-of-bounds",
-                        f"region '{r.id}' {self.span(r.start, r.end)} extends past the end "
-                        f"of {container}",
+                        f"region '{r.id}' {self.span(r.start, r.end)}{how} extends past the "
+                        f"end of {container}",
                         r.at("size"),
                     )
+            # Don't place a following implicit sibling after a region that already overflows.
+            cursor = r.end if r.end <= hi else None
             self.layout(r.children, r.start, r.end, r)
         self.overlaps(regions)
 

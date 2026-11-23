@@ -29,7 +29,8 @@ _ID_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 MAX_ADDRESS_BITS = 64
 
 _REGION_KEYS = {"id", "name", "start", "size", "children"}
-_REGION_REQUIRED = {"id", "name", "start"}
+# `start` may be omitted on children (see `_region`), so it is checked separately.
+_REGION_REQUIRED = {"id", "name"}
 
 
 def parse_int(text: str) -> int | None:
@@ -193,12 +194,14 @@ class SourceLoader:
             )
             bits = None
 
-        regions = self._regions(mem["regions"][1], path, "memory.regions")
+        regions = self._regions(mem["regions"][1], path, "memory.regions", nested=False)
         if bits is None:
             return None
         return MemoryMap(bits, regions, self._loc(mem_node, path), files=self._files)
 
-    def _regions(self, node: Node, path: Path, what: str) -> list[Region]:
+    def _regions(self, node: Node, path: Path, what: str, nested: bool) -> list[Region]:
+        """Parse a region list. `nested` is True for `children` lists (and files included
+        into them), where regions may leave out `start`."""
         if not isinstance(node, SequenceNode):
             self.diags.error(
                 "schema", f"{what} must be a list, got {_kind(node)}", self._loc(node, path)
@@ -209,14 +212,14 @@ class SourceLoader:
             if isinstance(item, MappingNode) and any(
                 isinstance(k, ScalarNode) and k.value == "include" for k, _ in item.value
             ):
-                out.extend(self._include(item, path))
+                out.extend(self._include(item, path, nested))
             else:
-                region = self._region(item, path)
+                region = self._region(item, path, nested)
                 if region is not None:
                     out.append(region)
         return out
 
-    def _include(self, node: MappingNode, path: Path) -> list[Region]:
+    def _include(self, node: MappingNode, path: Path, nested: bool) -> list[Region]:
         fields = self._mapping(node, path, "include", {"include"}, {"include"})
         if fields is None:
             return []
@@ -241,18 +244,21 @@ class SourceLoader:
         self._files.setdefault(inc_path, [])
         self._include_stack.append(inc_path)
         try:
-            return self._regions(fields["regions"][1], inc_path, "regions")
+            return self._regions(fields["regions"][1], inc_path, "regions", nested)
         finally:
             self._include_stack.pop()
 
-    def _region(self, node: Node, path: Path) -> Region | None:
-        fields = self._mapping(node, path, "region", _REGION_KEYS, _REGION_REQUIRED)
+    def _region(self, node: Node, path: Path, nested: bool) -> Region | None:
+        """Parse one region. A child (`nested`) may omit `start` if it gives a `size`; its
+        start is then resolved during semantic analysis (see `Region.start`)."""
+        required = _REGION_REQUIRED if nested else _REGION_REQUIRED | {"start"}
+        fields = self._mapping(node, path, "region", _REGION_KEYS, required)
         if fields is None:
             # Still descend into children so their errors are reported in the same run.
             if isinstance(node, MappingNode):
                 for k, v in node.value:
                     if isinstance(k, ScalarNode) and k.value == "children":
-                        self._regions(v, path, "children")
+                        self._regions(v, path, "children", nested=True)
             return None
 
         ok = True
@@ -265,20 +271,34 @@ class SourceLoader:
             )
             rid = None
         name = self._string(fields["name"][1], path, "name")
-        start = self._int(fields["start"][1], path, "start")
+        start = None
+        if "start" in fields:
+            start = self._int(fields["start"][1], path, "start")
+            ok = ok and start is not None
         size = None
         if "size" in fields:
             size = self._int(fields["size"][1], path, "size")
             ok = ok and size is not None
+        elif "start" not in fields:
+            self.diags.error(
+                "missing-size",
+                "region: a region without 'start' must have a 'size' "
+                "so its address can be resolved",
+                self._loc(node, path),
+            )
+            ok = False
         children = (
-            self._regions(fields["children"][1], path, "children") if "children" in fields else []
+            self._regions(fields["children"][1], path, "children", nested=True)
+            if "children" in fields
+            else []
         )
-        if not ok or rid is None or name is None or start is None:
+        if not ok or rid is None or name is None:
             return None
         return Region(
             id=rid,
             name=name,
             start=start,
+            implicit_start=start is None,
             size=size,
             children=children,
             loc=self._loc(node, path),

@@ -314,6 +314,171 @@ def test_zero_size(tmp_path):
     ]
 
 
+# -- implicit start ----------------------------------------------------------------------
+
+
+def starts(mm) -> dict[str, tuple[int, int]]:
+    return {r.id: (r.start, r.end) for r in mm.walk()}
+
+
+def test_implicit_start_packs_children(tmp_path):
+    mm, diags = lint(
+        write(
+            tmp_path,
+            {
+                "top.yml": top(
+                    """\
+                    - id: p
+                      name: P
+                      start: 0x1000
+                      size: 0x1000
+                      children:
+                        - { id: a, name: A, size: 0x10 }
+                        - { id: b, name: B, size: 0x20 }
+                        - { id: c, name: C, start: 0x1800, size: 0x10 }
+                        - { id: d, name: D, size: 0x10 }
+                        - id: e
+                          name: E
+                          size: 0x100
+                          children:
+                            - { id: f, name: F, size: 4 }
+                """
+                )
+            },
+        )
+    )
+    assert diags.items == [], [d.render() for d in diags.items]
+    got = starts(mm)
+    assert got["a"] == (0x1000, 0x1010)  # first child: parent's start
+    assert got["b"] == (0x1010, 0x1030)  # right after the previous sibling
+    assert got["d"] == (0x1810, 0x1820)  # after an explicitly placed sibling
+    assert got["e"] == (0x1820, 0x1920)
+    assert got["f"] == (0x1820, 0x1824)  # nested implicit child
+    assert all(not r.implicit_start for r in mm.walk() if r.id in ("p", "c"))
+
+
+def test_implicit_start_through_include(tmp_path):
+    mm, diags = lint(
+        write(
+            tmp_path,
+            {
+                "top.yml": top(
+                    """\
+                    - id: p
+                      name: P
+                      start: 0x100
+                      size: 0x100
+                      children:
+                        - { id: a, name: A, size: 8 }
+                        - include: kids.yml
+                """
+                ),
+                "kids.yml": "regions:\n  - { id: b, name: B, size: 8 }\n",
+            },
+        )
+    )
+    assert diags.items == [], [d.render() for d in diags.items]
+    assert starts(mm)["b"] == (0x108, 0x110)
+
+
+def test_implicit_start_requires_size(tmp_path):
+    result = codes(
+        tmp_path,
+        {
+            "top.yml": top(
+                """\
+                - id: p
+                  name: P
+                  start: 0
+                  children:
+                    - { id: c, name: C }
+            """
+            )
+        },
+    )
+    assert result == ["missing-size"]
+
+
+def test_top_level_region_requires_start(tmp_path):
+    result = codes(tmp_path, {"top.yml": top("    - { id: a, name: A, size: 4 }\n")})
+    assert result == ["missing-key"]
+    # Also when spliced into the top level from an included file.
+    result = codes(
+        tmp_path,
+        {
+            "top.yml": top("    - include: b.yml\n"),
+            "b.yml": "regions:\n  - { id: b, name: B, size: 4 }\n",
+        },
+    )
+    assert result == ["missing-key"]
+
+
+def test_implicit_start_overflows_parent(tmp_path):
+    # 'b' overflows; 'c' is not placed after it, so there is no follow-on error.
+    _, diags = lint(
+        write(
+            tmp_path,
+            {
+                "top.yml": top(
+                    """\
+                    - id: p
+                      name: P
+                      start: 0
+                      size: 0x10
+                      children:
+                        - { id: a, name: A, size: 8 }
+                        - { id: b, name: B, size: 9 }
+                        - { id: c, name: C, size: 1 }
+                """
+                )
+            },
+        )
+    )
+    assert diags.codes() == ["out-of-bounds"]
+    assert "implicitly, after 'a'" in diags.items[0].render()
+
+
+def test_implicit_start_after_open_ended_sibling(tmp_path):
+    result = codes(
+        tmp_path,
+        {
+            "top.yml": top(
+                """\
+                - id: p
+                  name: P
+                  start: 0
+                  size: 0x10
+                  children:
+                    - { id: a, name: A, start: 4 }
+                    - { id: b, name: B, size: 4 }
+            """
+            )
+        },
+    )
+    assert result == ["out-of-bounds"]
+
+
+def test_implicit_start_overlaps_explicit_sibling(tmp_path):
+    result = codes(
+        tmp_path,
+        {
+            "top.yml": top(
+                """\
+                - id: p
+                  name: P
+                  start: 0
+                  size: 0x100
+                  children:
+                    - { id: a, name: A, start: 0x10, size: 4 }
+                    - { id: b, name: B, size: 0x10 }
+                    - { id: c, name: C, start: 0x18, size: 4 }
+            """
+            )
+        },
+    )
+    assert result == ["overlap"]
+
+
 def test_duplicate_id_across_includes(tmp_path):
     result = codes(
         tmp_path,

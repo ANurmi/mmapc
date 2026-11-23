@@ -52,7 +52,10 @@ regions:
     size: 512K
     children:
       - { id: uart, name: UART, start: 0x00033000, size: 8 }
+      - { id: spi,  name: SPI,  size: 4K }   # no start: placed right after 'uart'
 ```
+
+- A child region can leave out `start` if it gives a `size`. It's then placed right after the previous sibling in source order, or at the parent's start if it's the first child. Top-level regions always need a `start`.
 
 - `id` must be a valid identifier and unique across the whole map. `name` is a free-form label.
 - Numbers can be decimal, `0x` hex or `0b` binary, optionally with `_` separators and a `K`/`M`/`G` suffix (powers of 1024).

@@ -37,7 +37,7 @@ The pipeline is `lint.lint(path)` → `loader.SourceLoader` (syntax phase) → `
 ## Memory map source format
 
 - The top file has `memory: { address_bits, regions }`. An included file has only `regions:`. An `- include: <file>.yml` entry can appear in any regions or `children` list, and the included regions are spliced in at that point.
-- A region is `{ id, name, start, size?, children? }`. `id` must match `[A-Za-z_][A-Za-z0-9_]*` and be unique across the whole map. `name` is the human-readable label; a duplicate name is only a warning.
+- A region is `{ id, name, start, size?, children? }`. A child region (one in a `children` list, including regions spliced in there by an `include:`) can leave out `start` if it has a `size`. Otherwise the loader reports `missing-size`. Semantics then places it right after its preceding sibling in source order, or at the parent's start if it is the first child, and sets `Region.implicit_start`. Top-level regions always need `start`. `Region.start` is `None` until analysis has run. `id` must match `[A-Za-z_][A-Za-z0-9_]*` and be unique across the whole map. `name` is the human-readable label; a duplicate name is only a warning.
 - Numbers can be decimal, `0x` hex or `0b` binary, with optional `_` separators and an optional `K`/`M`/`G` (binary) suffix.
 - Lint enforces these rules: size > 0; regions stay inside the address space and inside their parent; siblings don't overlap (touching end-to-start is fine). A region without a size covers everything up to its container's end, so it must be the highest sibling.
 - In `src/`, the low address space is packed contiguously: core `0x00000`–`0x2FFFF`, BootROM at `0x30000`, peripherals from `0x33000`. If you resize one of these, rerun lint.
