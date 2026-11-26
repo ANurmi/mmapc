@@ -33,6 +33,7 @@ uv run mmapc -t md src/top.yml               # Markdown tables: build/top_memory
 | `-o`, `--output-dir DIR` | Where generated files go (default: `build`). |
 | `-n`, `--name NAME` | Design name used to name artifacts (default: the source file's name without extension). |
 | `-d`, `--directives FILE` | memmap settings for the `doc` target (see below). Only allowed with `-t doc`. |
+| `-a`, `--address-bits BITS` | Address width when the source has only `regions:` (default: 32). Ignored, with a warning if it differs, when the source sets `address_bits`. |
 | `-q`, `--quiet` | Don't print the map or the list of written files. |
 | `--werror` | Treat warnings as errors. |
 
@@ -57,6 +58,8 @@ regions:
       - { id: uart, name: UART, start: 0x00033000, size: 8 }
       - { id: spi,  name: SPI,  size: 4K }   # no start: placed right after 'uart'
 ```
+
+A file with only `regions:`, like `peripherals.yml` above, can also be the source given to `mmapc`. This lets you check or generate artifacts for one part of the map by itself, e.g. `mmapc -a 32 src/peripherals.yml`. The address width comes from `-a` (default 32). Its regions may leave out `start`, as children can; the first one then starts at 0.
 
 - A child region can leave out `start` if it gives a `size`. It's then placed right after the previous sibling in source order, or at the parent's start if it's the first child. Top-level regions always need a `start`.
 

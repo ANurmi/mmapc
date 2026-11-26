@@ -96,6 +96,78 @@ def test_address_bits_range(tmp_path, bits):
     assert codes(tmp_path, {"top.yml": top("    []\n", bits=bits)}) == ["schema"]
 
 
+# -- bare regions file as the top source ------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["core.yml", "peripherals.yml"])
+def test_repo_included_files_lint_standalone(name):
+    mm, diags = lint(REPO_SRC / name)
+    assert diags.items == [], [d.render() for d in diags.items]
+    assert mm.address_bits == 32
+    assert list(mm.files) == [(REPO_SRC / name).resolve()]
+
+
+def test_bare_regions_top(tmp_path):
+    mm, diags = lint(
+        write(
+            tmp_path,
+            {
+                "top.yml": """\
+                regions:
+                  - { id: a, name: A, size: 4K }      # no start: placed at 0
+                  - { id: b, name: B, size: 4K }      # ... then after 'a'
+                  - include: more.yml
+                """,
+                "more.yml": "regions:\n  - { id: c, name: C, start: 0x8000 }\n",
+            },
+        ),
+        address_bits=16,
+    )
+    assert diags.items == [], [d.render() for d in diags.items]
+    assert [(r.id, r.start, r.end) for r in mm.walk()] == [
+        ("a", 0, 0x1000),
+        ("b", 0x1000, 0x2000),
+        ("c", 0x8000, 0x10000),  # no size: runs to the end of the 16-bit space
+    ]
+
+
+def test_bare_regions_top_checks_address_width(tmp_path):
+    files = {"top.yml": "regions:\n  - { id: a, name: A, start: 0, size: 128K }\n"}
+    assert codes(tmp_path, files) == []
+    _, diags = lint(write(tmp_path, files), address_bits=16)
+    assert diags.codes() == ["out-of-bounds"]
+
+
+@pytest.mark.parametrize("bits", [0, 65])
+def test_bare_regions_top_address_bits_range(tmp_path, bits):
+    _, diags = lint(write(tmp_path, {"top.yml": "regions: []\n"}), address_bits=bits)
+    assert diags.codes() == ["schema"]
+
+
+def test_top_kind(tmp_path):
+    both = "memory: { address_bits: 32, regions: [] }\nregions: []\n"
+    assert codes(tmp_path, {"top.yml": both}) == ["top-kind"]
+    assert codes(tmp_path, {"top.yml": "{}\n"}) == ["missing-key"]
+    assert codes(tmp_path, {"top.yml": "regoins: []\n"}) == ["unknown-key"]
+
+
+def test_address_bits_ignored_for_full_map(tmp_path):
+    path = write(tmp_path, {"top.yml": top("    []\n")})
+    assert lint(path, address_bits=32)[1].items == []
+    _, diags = lint(path, address_bits=16)
+    assert diags.codes() == ["address-bits-ignored"]
+    assert diags.warnings == diags.items
+
+
+def test_cli_address_bits(tmp_path, capsys):
+    path = write(tmp_path, {"top.yml": "regions:\n  - { id: a, name: A, start: 0, size: 128K }\n"})
+    assert main(["-l", str(path)]) == 0
+    assert "32-bit address space" in capsys.readouterr().out
+    assert main(["-l", "-a", "16", str(path)]) == 1
+    assert main(["-l", "-a", "16", str(REPO_SRC / "top.yml")]) == 0
+    assert main(["-l", "-a", "16", "--werror", str(REPO_SRC / "top.yml")]) == 1
+
+
 def test_unknown_and_missing_region_keys(tmp_path):
     result = codes(tmp_path, {"top.yml": top("    - { id: a, start: 0, sise: 4 }\n")})
     assert sorted(result) == ["missing-key", "unknown-key"]

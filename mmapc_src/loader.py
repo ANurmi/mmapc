@@ -27,6 +27,8 @@ _MULTIPLIER = {"": 1, "K": 1 << 10, "M": 1 << 20, "G": 1 << 30}
 _ID_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 MAX_ADDRESS_BITS = 64
+# Address width of a top file that is a bare `regions:` list (no `memory:` section).
+DEFAULT_ADDRESS_BITS = 32
 
 _REGION_KEYS = {"id", "name", "start", "size", "children"}
 # `start` may be omitted on children (see `_region`), so it is checked separately.
@@ -167,16 +169,43 @@ class SourceLoader:
 
     # -- grammar -----------------------------------------------------------------------
 
-    def load(self, path: Path) -> MemoryMap | None:
+    def load(self, path: Path, address_bits: int | None = None) -> MemoryMap | None:
+        """Load a top file. It is either a full map (`memory: { address_bits, regions }`) or
+        a bare `regions:` file, i.e. one normally included from another file. A bare file
+        takes its address width from `address_bits` (default `DEFAULT_ADDRESS_BITS`), and its
+        regions are parsed like children, so they may leave out `start` (the first one is
+        then placed at 0). `address_bits` is ignored for a full map, with a warning if it
+        disagrees with the source."""
         path = path.resolve()
         self._include_stack = [path]
         self._files = {path: []}
         root = self._compose(path, None)
         if root is None:
             return None
-        top = self._mapping(root, path, "top-level", {"memory"}, {"memory"})
+        top = self._mapping(root, path, "top-level", {"memory", "regions"}, set())
         if top is None:
             return None
+        if len(top) != 1:
+            if top:
+                msg = "top-level: give either 'memory' (a full map) or 'regions', not both"
+                self.diags.error("top-kind", msg, self._loc(root, path))
+            else:
+                msg = "top-level: missing 'memory' (a full map) or 'regions' (a bare region list)"
+                self.diags.error("missing-key", msg, self._loc(root, path))
+            return None
+
+        if "regions" in top:
+            bits = DEFAULT_ADDRESS_BITS if address_bits is None else address_bits
+            if not 1 <= bits <= MAX_ADDRESS_BITS:
+                self.diags.error(
+                    "schema",
+                    f"address_bits must be between 1 and {MAX_ADDRESS_BITS}, got {bits}",
+                    self._loc(root, path),
+                )
+                return None
+            regions = self._regions(top["regions"][1], path, "regions", nested=True)
+            return MemoryMap(bits, regions, self._loc(root, path), files=self._files)
+
         mem_node = top["memory"][1]
         mem = self._mapping(
             mem_node, path, "memory", {"address_bits", "regions"}, {"address_bits", "regions"}
@@ -193,6 +222,13 @@ class SourceLoader:
                 self._loc(bits_node, path),
             )
             bits = None
+        if bits is not None and address_bits is not None and address_bits != bits:
+            self.diags.warning(
+                "address-bits-ignored",
+                f"address width {address_bits} given on the command line is ignored; "
+                f"the source sets address_bits: {bits}",
+                self._loc(bits_node, path),
+            )
 
         regions = self._regions(mem["regions"][1], path, "memory.regions", nested=False)
         if bits is None:

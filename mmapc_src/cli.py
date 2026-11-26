@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .diagnostics import Diagnostics
 from .lint import lint
+from .loader import DEFAULT_ADDRESS_BITS
 from .render import render_map
 from .targets import TARGETS
 from .targets.options import TargetOptions
@@ -21,7 +22,7 @@ def _report(diags: Diagnostics) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
-    mm, diags = lint(args.source)
+    mm, diags = lint(args.source, args.address_bits)
     _report(diags)
     n_err, n_warn = len(diags.errors), len(diags.warnings)
     # The map is only fully resolved (region ends computed) when there are no errors.
@@ -52,7 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mmapc", description="mmapc: A YAML-based memory map compiler"
     )
-    parser.add_argument("source", type=Path, help="top-level memory map file (e.g. src/top.yml)")
+    parser.add_argument(
+        "source",
+        type=Path,
+        help="top-level memory map file (e.g. src/top.yml), or a bare regions file "
+        "(e.g. src/core.yml)",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "-l",
@@ -89,6 +95,15 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="YAML file of memmap-specific settings (figure, view, style, memory, "
         "regions) for the doc target",
+    )
+    parser.add_argument(
+        "-a",
+        "--address-bits",
+        type=int,
+        metavar="BITS",
+        help="address width for a source with only 'regions:' and no 'memory:' section, "
+        f"e.g. a file normally included from another (default: {DEFAULT_ADDRESS_BITS}); "
+        "ignored, with a warning if different, when the source sets address_bits",
     )
     parser.add_argument(
         "-q",
