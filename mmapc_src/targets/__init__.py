@@ -13,7 +13,7 @@ from pathlib import PurePosixPath
 
 from ..diagnostics import Diagnostics
 from ..model import MemoryMap
-from . import c, doc, md, sv
+from . import c, doc, ipxact, md, sv, svd
 from .options import TargetOptions
 
 Generator = Callable[[MemoryMap, Diagnostics, TargetOptions], dict[PurePosixPath, str]]
@@ -21,6 +21,8 @@ Generator = Callable[[MemoryMap, Diagnostics, TargetOptions], dict[PurePosixPath
 TARGETS: dict[str, Generator] = {
     "c": c.generate,
     "doc": doc.generate,
+    "ipxact": ipxact.generate,
     "md": md.generate,
     "sv": sv.generate,
+    "svd": svd.generate,
 }

@@ -13,7 +13,7 @@ uv sync
 ## Usage
 
 ```
-mmapc [-l | -t {c,sv,doc,md}] [-o OUTPUT_DIR] [-n NAME] [-d FILE] [-q] [--werror] source
+mmapc [-l | -t {c,sv,doc,md,svd,ipxact}] [-o OUTPUT_DIR] [-n NAME] [-d FILE] [-a BITS] [-q] [--werror] source
 ```
 
 Every run lints the sources first. If there are errors, mmapc prints them as `file:line:col` messages, exits with status 1 and writes nothing.
@@ -24,12 +24,14 @@ uv run mmapc -t c src/top.yml                # C headers: build/top.h, build/cor
 uv run mmapc -t sv -n soc src/top.yml        # SystemVerilog: build/soc_address_map_pkg.sv
 uv run mmapc -t doc src/top.yml              # memmap drawing config: build/top_memmap.yaml
 uv run mmapc -t md src/top.yml               # Markdown tables: build/top_memory_map.md
+uv run mmapc -t svd -n zeroheti src/top.yml  # CMSIS-SVD: build/zeroheti.svd
+uv run mmapc -t ipxact -n zeroheti src/top.yml  # IP-XACT: build/zeroheti.ipxact.xml
 ```
 
 | Option | Meaning |
 | --- | --- |
 | `-l`, `--lint-only` | Only check the sources and print the map. This is also what happens when `-t` isn't given. |
-| `-t`, `--target {c,sv,doc,md}` | Generate artifacts instead of printing the map. Can't be combined with `-l`. |
+| `-t`, `--target {c,sv,doc,md,svd,ipxact}` | Generate artifacts instead of printing the map. Can't be combined with `-l`. |
 | `-o`, `--output-dir DIR` | Where generated files go (default: `build`). |
 | `-n`, `--name NAME` | Design name used to name artifacts (default: the source file's name without extension). |
 | `-d`, `--directives FILE` | memmap settings for the `doc` target (see below). Only allowed with `-t doc`. |
@@ -82,6 +84,8 @@ A file with only `regions:`, like `peripherals.yml` above, can also be the sourc
   memmap is a dev dependency, so `uv run memmap ...` works after `uv sync`.
 
 - **`md`**: a single `<NAME>_memory_map.md` with GitHub-flavored Markdown tables (name, id, start, inclusive end, size): one for the top-level regions, then a section with a table of children for each region that has them. Siblings are in address order, as in `mmapc -l`.
+- **`svd`**: a single `<NAME>.svd` [CMSIS-SVD](https://open-cmsis-pack.github.io/svd-spec/) device description (schema 1.3) with no registers. Each leaf region (one without children) becomes a peripheral, e.g. `UART` with base address `0x00033000` and an address block covering the region. Its parent region becomes the peripheral's `groupName`. Regions with children aren't peripherals themselves, since they would overlap their children. A leaf with the same id and size as an earlier one, as in a subsystem included twice, is written as `derivedFrom` that one. `<NAME>` must be a valid SVD identifier.
+- **`ipxact`**: a single `<NAME>.ipxact.xml` IP-XACT component (IEEE 1685-2022) with one memory map that keeps the hierarchy. Top-level regions become `addressBlock`s and their children nested `registerFile`s (with no registers) at offsets relative to their parent. Regions with children whose layout is identical, like a subsystem included twice, share a `typeIdentifier`. The VLNV is `mmapc:mmapc:<NAME>:1.0`.
 
 ### memmap directives (`-d`)
 
