@@ -13,8 +13,17 @@ place in the mmapc sources:
     view:   { expand: [periph] }                       # merged over the defaults
     style:  { palette: datasheet }
     memory: { check_alignment: true }                  # memmap memory options
-    regions:                                           # extra keys per mmapc region id
+    regions:                                           # extra keys per mmapc region
       bootrom: { color: "#ffe0b0", note: Read-only }
+      periph.uart: { color: "#e0f0ff" }
+
+A `regions` key names a region by its dotted path (`periph.uart`) or, if exactly one region
+has it, by its plain id (`uart`). A path is tried first, so `uart` also selects a top-level
+`uart` even if other regions use that id.
+
+memmap needs ids that are unique across the whole map, while mmapc ids need only be unique
+among siblings. A region whose id is used more than once gets its path joined with `_` as
+its memmap id (`periph_uart`); `view.expand` uses the same ids.
 
 `figure`, `view` and `style` are deep-merged over the generated defaults (mappings merge,
 anything else, including lists, is replaced) and passed on unchecked: memmap validates them.
@@ -124,14 +133,27 @@ def _fields(
     return out
 
 
+def _resolve_region(mm: MemoryMap, key: str) -> tuple[Region | None, list[Region]]:
+    """Find the region a directives key names: its dotted path, else its id when unique.
+    Returns (region, []) on success, or (None, candidates) where several regions share
+    the id."""
+    by_path = {r.qualname: r for r in mm.walk()}
+    if key in by_path:
+        return by_path[key], []
+    matches = [r for r in mm.walk() if r.id == key]
+    if len(matches) == 1:
+        return matches[0], []
+    return None, matches
+
+
 def _load_directives(path: Path, mm: MemoryMap, diags: Diagnostics) -> dict[str, Any] | None:
-    """Read and check a directives file; returns None (with diagnostics) when it is invalid."""
+    """Read and check a directives file; returns None (with diagnostics) when it is invalid.
+    `regions` comes back keyed by `Region.path`."""
     n_err = len(diags.errors)
     sl = SourceLoader(diags)
     root = sl._compose(path, None)
     if root is None:
         return None
-    ids = {r.id for r in mm.walk()}
     out: dict[str, Any] = {}
     for key, (_, value) in _fields(sl, root, path, "directives", _DIRECTIVE_KEYS).items():
         if key in ("figure", "view", "style"):
@@ -142,39 +164,87 @@ def _load_directives(path: Path, mm: MemoryMap, diags: Diagnostics) -> dict[str,
             fields = _fields(sl, value, path, "directives: memory", _MEMORY_KEYS)
             out[key] = {k: _construct(v) for k, (_, v) in fields.items()}
         else:  # regions
-            regions: dict[str, dict[str, Any]] = {}
-            for rid, (key_node, rnode) in _fields(
+            regions: dict[tuple[str, ...], dict[str, Any]] = {}
+            first: dict[tuple[str, ...], tuple[str, Node]] = {}
+            for rkey, (key_node, rnode) in _fields(
                 sl, value, path, "directives: regions", None
             ).items():
-                if rid not in ids:
+                loc = sl._loc(key_node, path)
+                region, candidates = _resolve_region(mm, rkey)
+                if region is None and candidates:
+                    paths = ", ".join(f"'{r.qualname}'" for r in candidates)
                     diags.error(
-                        "doc-unknown-region",
-                        f"directives: regions: no region with id '{rid}' in the memory map",
-                        sl._loc(key_node, path),
+                        "doc-ambiguous-region",
+                        f"directives: regions: id '{rkey}' is used by several regions "
+                        f"({paths}); name one by its dotted path",
+                        loc,
                     )
                     continue
-                what = f"directives: regions: {rid}"
+                if region is None:
+                    diags.error(
+                        "doc-unknown-region",
+                        f"directives: regions: no region '{rkey}' in the memory map",
+                        loc,
+                    )
+                    continue
+                if region.path in first:
+                    other, other_node = first[region.path]
+                    diags.error(
+                        "doc-duplicate-region",
+                        f"directives: regions: '{rkey}' and '{other}' both name region "
+                        f"'{region.qualname}'",
+                        loc,
+                        [(sl._loc(other_node, path), f"'{other}' given here")],
+                    )
+                    continue
+                first[region.path] = (rkey, key_node)
+                what = f"directives: regions: {rkey}"
                 fields = _fields(sl, rnode, path, what, _REGION_KEYS)
-                regions[rid] = {k: _construct(v) for k, (_, v) in fields.items()}
+                regions[region.path] = {k: _construct(v) for k, (_, v) in fields.items()}
             out[key] = regions
     return None if len(diags.errors) > n_err else out
 
 
-def _region(r: Region, width: int, extra: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _region(
+    r: Region, width: int, extra: dict[tuple[str, ...], dict[str, Any]], ids: dict[int, str]
+) -> dict[str, Any]:
     out: dict[str, Any] = {
-        "id": r.id,
+        "id": ids[id(r)],
         "name": r.name,
         "start": _Addr(r.start, width),
         "size": _size(r.end - r.start),
     }
-    out.update(extra.get(r.id, {}))
+    out.update(extra.get(r.path, {}))
     if r.children:
         kids = sorted(r.children, key=lambda c: c.start)
-        out["children"] = [_region(c, width, extra) for c in kids]
+        out["children"] = [_region(c, width, extra, ids) for c in kids]
     return out
 
 
+def _memmap_ids(mm: MemoryMap, diags: Diagnostics) -> dict[int, str]:
+    """memmap id of each region (keyed by `id(region)`); see the module docstring."""
+    ambiguous = mm.ambiguous_ids()
+    ids: dict[int, str] = {}
+    by_name: dict[str, Region] = {}
+    for r in mm.walk():
+        name = mm.unique_name(r, "_", ambiguous)
+        if name in by_name:
+            other = by_name[name]
+            diags.error(
+                "doc-name-clash",
+                f"regions '{other.qualname}' and '{r.qualname}' would both get memmap id '{name}'",
+                r.at("id"),
+                [(other.at("id"), f"'{other.qualname}' defined here")],
+            )
+        by_name.setdefault(name, r)
+        ids[id(r)] = name
+    return ids
+
+
 def generate(mm: MemoryMap, diags: Diagnostics, opts: TargetOptions) -> dict[PurePosixPath, str]:
+    ids = _memmap_ids(mm, diags)
+    if diags.errors:
+        return {}
     directives: dict[str, Any] = {}
     if opts.directives is not None:
         loaded = _load_directives(opts.directives, mm, diags)
@@ -187,10 +257,10 @@ def generate(mm: MemoryMap, diags: Diagnostics, opts: TargetOptions) -> dict[Pur
     regions = sorted(mm.regions, key=lambda r: r.start)
     memory: dict[str, Any] = {"address_bits": mm.address_bits}
     memory.update(directives.get("memory", {}))
-    memory["regions"] = [_region(r, width, extra) for r in regions]
+    memory["regions"] = [_region(r, width, extra, ids) for r in regions]
 
     # Zoom into every region with children, in address order, top level first.
-    expand = [r.id for r in sorted(mm.walk(), key=lambda r: r.start) if r.children]
+    expand = [ids[id(r)] for r in sorted(mm.walk(), key=lambda r: r.start) if r.children]
     view: dict[str, Any] = {"expand": expand} if expand else {}
 
     config: dict[str, Any] = {

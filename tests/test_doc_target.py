@@ -193,6 +193,121 @@ def test_directives_bad_yaml_and_missing_file(tmp_path):
     assert text is None and diags.codes() == ["io"]
 
 
+def test_replicated_ids_are_qualified(replicated_map, tmp_path):
+    d = directives(
+        tmp_path,
+        """\
+        regions:
+          sub_a.uart: { color: "#ff0000" }   # by path
+          rom: { note: Boot }                # unique id
+          sub_b.dma.ctrl: { name: B Control }
+        """,
+    )
+    text, diags = generate(replicated_map, d)
+    assert diags.items == [], [x.render() for x in diags.items]
+    cfg = yaml.safe_load(text)
+    by_id = regions_by_id(cfg["memory"]["regions"])
+    assert sorted(by_id) == [
+        "rom", "sub_a", "sub_a_dma", "sub_a_dma_ctrl", "sub_a_uart",
+        "sub_b", "sub_b_dma", "sub_b_dma_ctrl", "sub_b_uart",
+    ]  # fmt: skip
+    assert by_id["sub_a_uart"]["color"] == "#ff0000"
+    assert "color" not in by_id["sub_b_uart"]
+    assert by_id["rom"]["note"] == "Boot"
+    assert by_id["sub_b_dma_ctrl"]["name"] == "B Control"
+    assert cfg["view"] == {"expand": ["sub_a", "sub_a_dma", "sub_b", "sub_b_dma"]}
+
+
+def test_directives_ambiguous_and_duplicate_regions(replicated_map, tmp_path):
+    d = directives(
+        tmp_path,
+        """\
+        regions:
+          uart: { color: red }        # ambiguous
+          sub_a.nope: { color: red }  # unknown
+          rom: { color: red }
+          .rom: { color: red }        # not a path either
+        """,
+    )
+    text, diags = generate(replicated_map, d)
+    assert text is None
+    assert diags.codes() == ["doc-ambiguous-region", "doc-unknown-region", "doc-unknown-region"]
+    assert "'sub_a.uart', 'sub_b.uart'" in diags.items[0].message
+    d = directives(tmp_path, "regions:\n  rom: {}\n  sub_a: {}\n  rom: {}\n")
+    assert generate(replicated_map, d)[1].codes() == ["duplicate-key"]
+
+
+def test_directives_path_and_id_naming_same_region(tmp_path):
+    top = write(
+        tmp_path,
+        """\
+        - id: p
+          name: P
+          start: 0
+          size: 0x100
+          children:
+            - { id: x, name: X, size: 4 }
+        """,
+    )
+    d = directives(tmp_path, "regions:\n  x: { color: red }\n  p.x: { color: blue }\n")
+    text, diags = generate(top, d)
+    assert text is None and diags.codes() == ["doc-duplicate-region"]
+
+
+def test_path_key_wins_over_ambiguous_id(tmp_path):
+    top = write(
+        tmp_path,
+        """\
+        - id: p
+          name: P
+          start: 0
+          size: 0x100
+          children:
+            - { id: x, name: X, size: 4 }
+        - { id: x, name: Top X, start: 0x100, size: 4 }
+        """,
+    )
+    text, diags = generate(top, directives(tmp_path, "regions:\n  x: { color: red }\n"))
+    assert diags.items == []
+    by_id = regions_by_id(yaml.safe_load(text)["memory"]["regions"])
+    assert by_id["x"]["color"] == "red" and "color" not in by_id["p_x"]
+
+
+def test_memmap_id_clash(tmp_path):
+    top = write(
+        tmp_path,
+        """\
+        - id: p
+          name: P
+          start: 0
+          size: 0x100
+          children:
+            - { id: x, name: X, size: 4 }
+        - { id: x,   name: X2,  start: 0x100, size: 4 }
+        - { id: p_x, name: P_X, start: 0x104, size: 4 }
+        """,
+    )
+    text, diags = generate(top)
+    assert text is None and diags.codes() == ["doc-name-clash"]
+
+
+@needs_memmap
+def test_replicated_map_renders_with_memmap(replicated_map, tmp_path):
+    # memmap only draws 32- or 64-bit spaces.
+    replicated_map.write_text(
+        replicated_map.read_text().replace("address_bits: 16", "address_bits: 32")
+    )
+    out = tmp_path / "out"
+    assert main(["-q", "-t", "doc", "-o", str(out), str(replicated_map)]) == 0
+    result = memmap("check", "top_memmap.yaml", "--strict", cwd=out)
+    assert result["ok"], result["diagnostics"]
+    resolved = regions_by_id(memmap("describe", "top_memmap.yaml", cwd=out)["regions"])
+    assert (resolved["sub_b_dma_ctrl"]["start"], resolved["sub_b_dma_ctrl"]["end"]) == (
+        0x1100,
+        0x110F,
+    )
+
+
 # -- CLI -----------------------------------------------------------------------------------
 
 

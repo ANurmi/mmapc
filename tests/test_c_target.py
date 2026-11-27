@@ -126,6 +126,49 @@ def test_case_insensitive_id_clash(tmp_path):
     assert diags.codes() == ["c-name-clash"]
 
 
+def test_replicated_ids_are_qualified(replicated_map):
+    out, diags = generate(replicated_map)
+    assert diags.items == []
+    top_h, sub_h = out[PurePosixPath("top.h")], out[PurePosixPath("sub.h")]
+    assert "#define SUB_A_BASE 0x0000UL  /* Subsystem A */" in top_h
+    assert "#define ROM_BASE   0x2000UL  /* ROM */" in top_h  # unique: not qualified
+    # The shared file's header has both instances.
+    for line in [
+        "#define SUB_A_UART_BASE     0x0000UL  /* UART */",
+        "#define SUB_A_DMA_BASE      0x0100UL  /* DMA */",
+        "#define SUB_A_DMA_CTRL_BASE 0x0100UL  /* Control */",
+        "#define SUB_B_UART_BASE     0x1000UL  /* UART */",
+        "#define SUB_B_DMA_CTRL_BASE 0x1100UL  /* Control */",
+    ]:
+        assert line in sub_h
+    assert "\n#define UART_BASE" not in sub_h
+
+
+def test_qualified_name_clash(tmp_path):
+    out, diags = generate(
+        write(
+            tmp_path,
+            {
+                "top.yml": top(
+                    """\
+                    - id: p
+                      name: P
+                      start: 0
+                      size: 0x100
+                      children:
+                        - { id: x, name: X, size: 4 }
+                    - { id: x,   name: X2,  start: 0x100, size: 4 }
+                    - { id: p_x, name: P_X, start: 0x104, size: 4 }   # same as p.x qualified
+                    """
+                )
+            },
+        )
+    )
+    assert out == {}
+    assert diags.codes() == ["c-name-clash"]
+    assert "'p.x' and 'p_x'" in diags.items[0].message
+
+
 def test_cli_writes_headers(tmp_path, capsys):
     out_dir = tmp_path / "gen"
     assert main(["-t", "c", "-o", str(out_dir), str(REPO_SRC / "top.yml")]) == 0

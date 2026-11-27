@@ -55,6 +55,9 @@ def generate(mm: MemoryMap, diags: Diagnostics, opts: TargetOptions) -> dict[Pur
         *table(mm.regions),
     ]
 
+    # A heading names its region by path when the id alone is ambiguous.
+    ambiguous = mm.ambiguous_ids()
+
     def sections(regions: list[Region], depth: int) -> None:
         for r in _ordered(regions):
             if not r.children:
@@ -63,7 +66,7 @@ def generate(mm: MemoryMap, diags: Diagnostics, opts: TargetOptions) -> dict[Pur
             lines.extend(
                 [
                     "",
-                    f"{level} {escape(r.name)} (`{r.id}`)",
+                    f"{level} {escape(r.name)} (`{mm.unique_name(r, '.', ambiguous)}`)",
                     "",
                     f"{addr(r.start)} to {addr(r.end - 1)}, {format_size(r.end - r.start)}.",
                     "",

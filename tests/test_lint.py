@@ -585,6 +585,77 @@ def test_duplicate_name_is_warning(tmp_path):
     assert diags.errors == []
 
 
+def test_same_id_under_different_parents(replicated_map):
+    mm, diags = lint(replicated_map)
+    # Also no duplicate-name warning: names, like ids, only need to differ among siblings.
+    assert diags.items == [], [d.render() for d in diags.items]
+    assert [(r.qualname, r.start, r.end) for r in mm.walk()] == [
+        ("sub_a", 0x0000, 0x1000),
+        ("sub_a.uart", 0x0000, 0x0100),
+        ("sub_a.dma", 0x0100, 0x0200),
+        ("sub_a.dma.ctrl", 0x0100, 0x0110),
+        ("sub_b", 0x1000, 0x2000),
+        ("sub_b.uart", 0x1000, 0x1100),
+        ("sub_b.dma", 0x1100, 0x1200),
+        ("sub_b.dma.ctrl", 0x1100, 0x1110),
+        ("rom", 0x2000, 0x2100),
+    ]
+    assert mm.ambiguous_ids() == {"uart", "dma", "ctrl"}
+    uart_b = next(r for r in mm.walk() if r.qualname == "sub_b.uart")
+    rom = next(r for r in mm.walk() if r.id == "rom")
+    assert mm.unique_name(uart_b) == "sub_b_uart"
+    assert mm.unique_name(uart_b, ".") == "sub_b.uart"
+    assert mm.unique_name(rom) == "rom"
+
+
+def test_duplicate_id_among_children(tmp_path):
+    _, diags = lint(
+        write(
+            tmp_path,
+            {
+                "top.yml": top(
+                    """\
+                    - id: p
+                      name: P
+                      start: 0
+                      size: 0x100
+                      children:
+                        - { id: a, name: A, size: 4 }
+                        - { id: a, name: B, size: 4 }
+                    - { id: a, name: Top A, start: 0x100, size: 4 }   # fine: different parent
+                """
+                )
+            },
+        )
+    )
+    assert diags.codes() == ["duplicate-id"]
+    assert "'p.a'" in diags.items[0].message
+    assert diags.items[0].loc.line == 10
+
+
+def test_duplicate_name_only_among_siblings(tmp_path):
+    _, diags = lint(
+        write(
+            tmp_path,
+            {
+                "top.yml": top(
+                    """\
+                    - id: p
+                      name: UART
+                      start: 0
+                      size: 0x100
+                      children:
+                        - { id: a, name: UART, size: 4 }
+                        - { id: b, name: UART, size: 4 }
+                """
+                )
+            },
+        )
+    )
+    assert diags.codes() == ["duplicate-name"]
+    assert "'p.b'" in diags.items[0].message
+
+
 # -- map printout ------------------------------------------------------------------------
 
 

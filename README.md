@@ -63,7 +63,8 @@ A file with only `regions:`, like `peripherals.yml` above, can also be the sourc
 
 - A child region can leave out `start` if it gives a `size`. It's then placed right after the previous sibling in source order, or at the parent's start if it's the first child. Top-level regions always need a `start`.
 
-- `id` must be a valid identifier and unique across the whole map. `name` is a free-form label.
+- `id` must be a valid identifier and unique among its siblings. Regions under different parents may share an id, so you can include the same subsystem file under several parents. The hierarchy tells them apart, e.g. `sub_a.uart` and `sub_b.uart`. `name` is a free-form label.
+- Generated names keep the plain id when no other region uses it. An id used more than once is qualified with its path in flat namespaces: `SUB_A_UART_BASE` in C, `SubAUartAddr` in SystemVerilog and `sub_a_uart` in memmap. Adding a second region with an existing id therefore renames the generated names of both.
 - Numbers can be decimal, `0x` hex or `0b` binary, optionally with `_` separators and a `K`/`M`/`G` suffix (powers of 1024).
 - Lint checks that regions don't overlap their siblings and stay within their parent and the address space. It also rejects sizes of zero, unknown or duplicate keys, and include cycles.
 
@@ -93,7 +94,7 @@ view:                                   # e.g. which regions to zoom into, label
   defaults: { labels: { size: true } }
 style: { palette: datasheet }
 memory: { check_alignment: true }       # only check_alignment, fill_gaps
-regions:                                # keyed by mmapc region id
+regions:                                # keyed by mmapc region path (periph.uart), or by id if unique
   bootrom: { color: "#ffe0b0", note: Read-only }
   ext:     { name: "External\nAddress Space" }   # only name, color, note, kind, sectors
 ```
@@ -102,7 +103,7 @@ regions:                                # keyed by mmapc region id
 uv run mmapc -t doc -n zeroheti -d src/doc.yml src/top.yml   # src/doc.yml is a commented example
 ```
 
-`figure`, `view` and `style` are merged over the defaults: mappings merge key by key, and anything else (including lists like `view.expand`) replaces the default. Their contents are passed through as-is and memmap checks them; run `memmap schema` for every key. `memory` and `regions` can't change where regions are, so the drawing always matches the sources. mmapc reports unknown keys and region ids in the directives file as errors and writes nothing.
+`figure`, `view` and `style` are merged over the defaults: mappings merge key by key, and anything else (including lists like `view.expand`) replaces the default. Their contents are passed through as-is and memmap checks them; run `memmap schema` for every key. `memory` and `regions` can't change where regions are, so the drawing always matches the sources. mmapc reports unknown keys and regions in the directives file as errors and writes nothing. It also reports an error when a plain id matches several regions.
 
 ## Development
 

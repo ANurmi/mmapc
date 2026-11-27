@@ -144,3 +144,12 @@ def test_cli_writes_markdown(tmp_path, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err.count("mmapc: wrote") == 1
+
+
+def test_replicated_ids_are_qualified_in_headings(replicated_map):
+    text = generate(replicated_map)
+    assert "## Subsystem A (`sub_a`)" in text
+    assert "### DMA (`sub_a.dma`)" in text
+    assert "### DMA (`sub_b.dma`)" in text
+    # Tables keep plain ids: the heading above says whose children they are.
+    assert "| UART | `uart` | `0x1000` | `0x10FF` | 256 |" in text

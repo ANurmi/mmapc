@@ -26,12 +26,18 @@ class _Analyzer:
 
     def run(self) -> None:
         space_end = 1 << self.mm.address_bits
+        self.set_paths(self.mm.regions, ())
         self.layout(self.mm.regions, 0, space_end, None)
-        self.unique()
+        self.unique(self.mm.regions)
+
+    def set_paths(self, regions: list[Region], prefix: tuple[str, ...]) -> None:
+        for r in regions:
+            r.path = (*prefix, r.id)
+            self.set_paths(r.children, r.path)
 
     def layout(self, regions: list[Region], lo: int, hi: int, parent: Region | None) -> None:
         container = (
-            f"parent '{parent.id}' {self.span(lo, hi)}"
+            f"parent '{parent.qualname}' {self.span(lo, hi)}"
             if parent
             else f"the {self.mm.address_bits}-bit address space"
         )
@@ -50,21 +56,22 @@ class _Analyzer:
             if not lo <= r.start < hi:
                 self.diags.error(
                     "out-of-bounds",
-                    f"region '{r.id}' starts at {self.hex(r.start)}{how}, outside {container}",
+                    f"region '{r.qualname}' starts at {self.hex(r.start)}{how}, "
+                    f"outside {container}",
                     r.at("start"),
                 )
                 continue
             if r.size is None:
                 r.end = hi
             elif r.size == 0:
-                self.diags.error("zero-size", f"region '{r.id}' has size 0", r.at("size"))
+                self.diags.error("zero-size", f"region '{r.qualname}' has size 0", r.at("size"))
                 continue
             else:
                 r.end = r.start + r.size
                 if r.end > hi:
                     self.diags.error(
                         "out-of-bounds",
-                        f"region '{r.id}' {self.span(r.start, r.end)}{how} extends past the "
+                        f"region '{r.qualname}' {self.span(r.start, r.end)}{how} extends past the "
                         f"end of {container}",
                         r.at("size"),
                     )
@@ -85,21 +92,23 @@ class _Analyzer:
                     note += " (no size given, so it extends to the end of its container)"
                 self.diags.error(
                     "overlap",
-                    f"region '{r.id}' {self.span(r.start, r.end)} overlaps '{reach.id}'",
+                    f"region '{r.qualname}' {self.span(r.start, r.end)} overlaps '{reach.id}'",
                     r.at("start"),
                     [(reach.loc, note)],
                 )
             if r.end > reach.end:
                 reach = r
 
-    def unique(self) -> None:
+    def unique(self, regions: list[Region]) -> None:
+        """Ids (and, as a warning, names) must be unique among siblings. The same id may
+        appear under different parents: the hierarchy tells them apart."""
         by_id: dict[str, Region] = {}
         by_name: dict[str, Region] = {}
-        for r in self.mm.walk():
+        for r in regions:
             if r.id in by_id:
                 self.diags.error(
                     "duplicate-id",
-                    f"duplicate region id '{r.id}'",
+                    f"duplicate region id '{r.qualname}' (ids must be unique among siblings)",
                     r.at("id"),
                     [(by_id[r.id].at("id"), "first defined here")],
                 )
@@ -108,12 +117,13 @@ class _Analyzer:
             if r.name in by_name:
                 self.diags.warning(
                     "duplicate-name",
-                    f"region '{r.id}' reuses name '{r.name}'",
+                    f"region '{r.qualname}' reuses name '{r.name}' of a sibling",
                     r.at("name"),
                     [(by_name[r.name].at("name"), f"also used by '{by_name[r.name].id}'")],
                 )
             else:
                 by_name[r.name] = r
+            self.unique(r.children)
 
 
 def analyze(mm: MemoryMap, diags: Diagnostics) -> None:

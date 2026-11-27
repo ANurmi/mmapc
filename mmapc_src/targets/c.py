@@ -5,9 +5,11 @@ headers of the files its source includes. Each region becomes a single base addr
 
     #define <ID>_BASE 0x...UL  /* <name> */
 
-with <ID> the region id in upper case. A top-level region with children gets its own
-paragraph, with its descendants directly below it. Ids are unique across the map, so the macros are
-flat; ids that collide only after upper-casing are reported as errors.
+with <ID> the region id in upper case. Ids need only be unique among siblings; an id used by
+more than one region is qualified with its hierarchy instead (`periph.uart` ->
+`PERIPH_UART_BASE`). A top-level region with children gets its own paragraph, with its
+descendants directly below it. Names that still collide (e.g. only after upper-casing) are
+reported as errors.
 """
 
 from __future__ import annotations
@@ -43,17 +45,23 @@ def generate(mm: MemoryMap, diags: Diagnostics, opts: TargetOptions) -> dict[Pur
     def header_of(src: Path) -> PurePosixPath:
         return PurePosixPath(src.relative_to(root).with_suffix(".h").as_posix())
 
-    # Macro prefixes must stay unique after upper-casing.
+    ambiguous = mm.ambiguous_ids()
+
+    def prefix(r: Region) -> str:
+        return mm.unique_name(r, "_", ambiguous).upper()
+
+    # Macro prefixes must stay unique after qualifying and upper-casing.
     by_macro: dict[str, Region] = {}
     for r in mm.walk():
-        macro = r.id.upper()
+        macro = prefix(r)
         if macro in by_macro:
             other = by_macro[macro]
             diags.error(
                 "c-name-clash",
-                f"region ids '{other.id}' and '{r.id}' both map to C macro prefix '{macro}'",
+                f"regions '{other.qualname}' and '{r.qualname}' both map to C macro prefix "
+                f"'{macro}'",
                 r.at("id"),
-                [(other.at("id"), f"'{other.id}' defined here")],
+                [(other.at("id"), f"'{other.qualname}' defined here")],
             )
         else:
             by_macro[macro] = r
@@ -100,15 +108,17 @@ def generate(mm: MemoryMap, diags: Diagnostics, opts: TargetOptions) -> dict[Pur
                 lines.append(f'#include "{target}"')
 
         entries = regions_by_file[src]
-        name_w = max([0] + [len(r.id) + len("_BASE") for _, r in entries])
+        name_w = max([0] + [len(prefix(r)) + len("_BASE") for _, r in entries])
         prev_top: Region | None = None
-        for depth, r in entries:
+        for i, (depth, r) in enumerate(entries):
             # Blank line before the first entry and around top-level regions with children.
+            if i == 0:
+                lines.append("")
             if depth == 0:
-                if prev_top is None or r.children or prev_top.children:
+                if prev_top is not None and (r.children or prev_top.children):
                     lines.append("")
                 prev_top = r
-            macro = f"{r.id.upper() + '_BASE':<{name_w}}"
+            macro = f"{prefix(r) + '_BASE':<{name_w}}"
             lines.append(f"#define {macro} {_literal(r.start, width)}  /* {_comment(r.name)} */")
         lines += ["", f"#endif /* {guard} */", ""]
         out[rel] = "\n".join(lines)

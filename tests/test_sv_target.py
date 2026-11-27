@@ -229,6 +229,37 @@ def test_reserved_type_clash(tmp_path):
     assert "sv-name-clash" in diags.codes()
 
 
+def test_replicated_ids_are_qualified(replicated_map):
+    out, diags = generate(replicated_map)
+    assert diags.items == []
+    text = out[PurePosixPath("soc_address_map_pkg.sv")]
+    for decl in [
+        "localparam addr_rule_t RomAddr ",  # unique: not qualified
+        "localparam addr_rule_t SubAUartAddr ",
+        "localparam addr_rule_t SubBDmaCtrlAddr ",
+        "} sub_a_dma_map_t;",
+        "} sub_b_dma_map_t;",
+        "localparam sub_b_dma_map_t SubBDmaMap = '{",
+    ]:
+        assert decl in text
+    # Struct fields keep plain ids; the nesting follows the hierarchy.
+    assert "    sub_a_dma_map_t       dma;" in text
+    checker = dedent(
+        """\
+        module check;
+          import soc_address_map_pkg::*;
+          if (AddressMap.num != 3) $error("num");
+          if (AddressMap.sub_a.uart.start_addr != 16'h0000) $error("a uart");
+          if (AddressMap.sub_b.uart.start_addr != 16'h1000) $error("b uart");
+          if (AddressMap.sub_b.dma.ctrl.end_addr != 16'h1110) $error("b ctrl");
+          if (SubBDmaMap.ctrl != SubBDmaCtrlAddr) $error("b dma map");
+          if (AddressMap.rom != RomAddr) $error("rom");
+        endmodule
+        """
+    )
+    assert elaborate([*out.values(), checker]) == []
+
+
 def test_bad_package_name(tmp_path):
     _, diags = generate(write(tmp_path, "- { id: a, name: A, start: 0, size: 4 }"), name="my-soc")
     assert diags.codes() == ["sv-bad-name"]
