@@ -1,3 +1,4 @@
+import re
 from pathlib import Path, PurePosixPath
 from textwrap import dedent
 
@@ -24,6 +25,11 @@ def write(tmp_path: Path, regions: str, bits: int = 32) -> Path:
     path = tmp_path / "top.yml"
     path.write_text(f"memory:\n  address_bits: {bits}\n  regions:\n{body}\n")
     return path
+
+
+def typedefs(text: str) -> list[str]:
+    """Names of the struct typedefs in a generated package, in order."""
+    return re.findall(r"^  } (\w+);$", text, re.MULTILINE)
 
 
 def elaborate(sources: list[str]) -> list[str]:
@@ -237,13 +243,15 @@ def test_replicated_ids_are_qualified(replicated_map):
         "localparam addr_rule_t RomAddr ",  # unique: not qualified
         "localparam addr_rule_t SubAUartAddr ",
         "localparam addr_rule_t SubBDmaCtrlAddr ",
-        "} sub_a_dma_map_t;",
-        "} sub_b_dma_map_t;",
-        "localparam sub_b_dma_map_t SubBDmaMap = '{",
+        "localparam dma_map_t SubBDmaMap = '{",
+        "localparam sub_a_map_t SubBMap = '{",
     ]:
         assert decl in text
-    # Struct fields keep plain ids; the nesting follows the hierarchy.
-    assert "    sub_a_dma_map_t       dma;" in text
+    # Identical structs share one typedef: both DMAs, and both subsystems (named after
+    # the first). Struct fields keep plain ids; the nesting follows the hierarchy.
+    assert typedefs(text) == ["addr_rule_t", "dma_map_t", "sub_a_map_t", "addr_map_t"]
+    assert "    dma_map_t             dma;" in text
+    assert "    sub_a_map_t  sub_b;" in text
     checker = dedent(
         """\
         module check;
@@ -258,6 +266,104 @@ def test_replicated_ids_are_qualified(replicated_map):
         """
     )
     assert elaborate([*out.values(), checker]) == []
+
+
+def test_identical_structs_share_a_type(tmp_path):
+    out, diags = generate(
+        write(
+            tmp_path,
+            """\
+            - id: uart0
+              name: UART0
+              start: 0x000
+              size: 0x100
+              children:
+                - { id: tx, name: TX, size: 4 }
+                - { id: rx, name: RX, size: 4 }
+            - id: uart1
+              name: UART1
+              start: 0x100
+              size: 0x100
+              children:
+                - { id: tx, name: TX, size: 4 }
+                - { id: rx, name: RX, size: 4 }
+            - id: swapped                        # same fields, other order: own type
+              name: Swapped
+              start: 0x200
+              size: 0x100
+              children:
+                - { id: rx, name: RX, size: 4 }
+                - { id: tx, name: TX, size: 4 }
+            - id: nested                         # child field is a struct: own type
+              name: Nested
+              start: 0x300
+              size: 0x100
+              children:
+                - { id: tx, name: TX, size: 4 }
+                - id: rx
+                  name: RX
+                  size: 8
+                  children:
+                    - { id: fifo, name: FIFO, size: 4 }
+            """,
+            bits=16,
+        )
+    )
+    assert diags.items == []
+    text = out[PurePosixPath("soc_address_map_pkg.sv")]
+    assert typedefs(text) == [
+        "addr_rule_t", "uart0_map_t", "swapped_map_t", "rx_map_t", "nested_map_t", "addr_map_t",
+    ]  # fmt: skip
+    assert "localparam uart0_map_t Uart1Map = '{" in text
+    checker = dedent(
+        """\
+        module check;
+          import soc_address_map_pkg::*;
+          if (AddressMap.uart1.rx.start_addr != 16'h0104) $error("uart1 rx");
+          if (AddressMap.uart0.tx != Uart0TxAddr) $error("uart0 tx");
+          if (AddressMap.nested.rx.fifo.start_addr != 16'h0304) $error("fifo");
+          if ($bits(AddressMap.uart0) != $bits(AddressMap.uart1)) $error("same type");
+        endmodule
+        """
+    )
+    assert elaborate([*out.values(), checker]) == []
+
+
+def test_same_id_different_shapes_get_qualified_types(tmp_path):
+    out, diags = generate(
+        write(
+            tmp_path,
+            """\
+            - id: a
+              name: A
+              start: 0x000
+              size: 0x100
+              children:
+                - id: dma
+                  name: DMA
+                  size: 0x10
+                  children:
+                    - { id: ctrl, name: Ctrl, size: 4 }
+            - id: b
+              name: B
+              start: 0x100
+              size: 0x100
+              children:
+                - id: dma
+                  name: DMA
+                  size: 0x10
+                  children:
+                    - { id: ctrl, name: Ctrl, size: 4 }
+                    - { id: data, name: Data, size: 4 }
+            """,
+            bits=16,
+        )
+    )
+    assert diags.items == []
+    text = out[PurePosixPath("soc_address_map_pkg.sv")]
+    assert typedefs(text) == ["addr_rule_t", "a_dma_map_t", "a_map_t", "b_dma_map_t", "b_map_t",
+                              "addr_map_t"]  # fmt: skip
+    assert elaborate(list(out.values())) == []
 
 
 def test_bad_package_name(tmp_path):

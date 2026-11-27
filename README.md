@@ -71,7 +71,7 @@ A file with only `regions:`, like `peripherals.yml` above, can also be the sourc
 ## Generated output
 
 - **`c`**: one header per source file, with `#include`s mirroring the source includes. Each region gets a `<ID>_BASE` macro, e.g. `#define UART_BASE 0x00033000UL`.
-- **`sv`**: a single `<NAME>_address_map_pkg` package. Each region gets an `addr_rule_t` localparam `{start_addr, end_addr}`, and regions with children also get nested `<id>_map_t` structs. These all combine into the top-level `AddressMap`. `end_addr` is exclusive. For a region that reaches the top of the address space, it wraps to `0`.
+- **`sv`**: a single `<NAME>_address_map_pkg` package. Each region gets an `addr_rule_t` localparam `{start_addr, end_addr}`, and regions with children also get nested `<id>_map_t` structs. Regions whose structs would have identical fields share one typedef, so a subsystem instantiated twice gets one set of struct types. If the regions sharing a type have different ids, the type is named after the first one. These all combine into the top-level `AddressMap`. `end_addr` is exclusive. For a region that reaches the top of the address space, it wraps to `0`.
 
 - **`doc`**: a single `<NAME>_memmap.yaml` config for [memmap](https://github.com/iharhl/memmap), which draws datasheet-style memory map images. Every region gets an explicit `start` and `size`. By default the drawing has the title `<NAME> memory map` and zooms into every region with children. Render it with:
 

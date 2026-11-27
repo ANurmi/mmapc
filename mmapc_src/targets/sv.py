@@ -10,9 +10,15 @@ For each region the package has:
   is its own `<child>_map_t`.
 The top-level `addr_map_t` / `AddressMap` holds `num` and the top-level regions.
 Ids need only be unique among siblings. Struct fields are named by plain id (the struct
-nesting follows the hierarchy), but the package-wide localparam and type names of a region
-whose id is used more than once are qualified with its path: `periph.uart` ->
-`PeriphUartAddr`, and `periph_uart_map_t` if it has children.
+nesting follows the hierarchy), but the package-wide localparam names of a region whose id
+is used more than once are qualified with its path: `periph.uart` -> `PeriphUartAddr`.
+
+Struct types are structural: regions whose structs would have identical fields (the same
+child ids, in order, with the same field types, recursively) share one typedef, e.g. a
+subsystem instantiated twice. A shared type is named `<id>_map_t` when all its regions
+have that id, else after the first one in post-order (`<qualified id>_map_t` if that id is
+ambiguous). Different shapes that would get the same name fall back to the qualified name
+of their first region.
 Regions and fields keep source (definition) order; types and maps are emitted bottom-up
 so every type is declared before use.
 """
@@ -82,12 +88,45 @@ def _comment(text: str) -> str:
     return " ".join(text.splitlines())
 
 
+# A struct's shape: its child fields, each (id, child shape), with None for a leaf
+# (`addr_rule_t`). Regions with equal shapes share a type.
+_Shape = tuple[tuple[str, "_Shape | None"], ...]
+
+
 class _Names:
     """Package-wide names of each region; see the module docstring."""
 
     def __init__(self, mm: MemoryMap) -> None:
         self.mm = mm
         self.ambiguous = mm.ambiguous_ids()
+        # Regions with children, bottom-up (post-order), in source order.
+        self.parents: list[Region] = []
+        self._shape: dict[int, _Shape] = {}  # id(region) -> shape
+        self._collect(mm.regions)
+        # Shapes in order of first use (post-order, so a type's field types come first),
+        # each with the regions that have it.
+        groups: dict[_Shape, list[Region]] = {}
+        for r in self.parents:
+            groups.setdefault(self._shape[id(r)], []).append(r)
+        self.groups = list(groups.values())
+        preferred = [self._preferred(g) for g in self.groups]
+        self._type_of_shape: dict[_Shape, str] = {}
+        for g, name in zip(self.groups, preferred, strict=True):
+            if preferred.count(name) > 1:
+                name = f"{self.base(g[0])}_map_t"
+            self._type_of_shape[self._shape[id(g[0])]] = name
+
+    def _collect(self, regions: list[Region]) -> None:
+        for r in regions:
+            self._collect(r.children)
+            if r.children:
+                self._shape[id(r)] = tuple((c.id, self._shape.get(id(c))) for c in r.children)
+                self.parents.append(r)
+
+    def _preferred(self, group: list[Region]) -> str:
+        if all(r.id == group[0].id for r in group):
+            return f"{group[0].id}_map_t"
+        return f"{self.base(group[0])}_map_t"
 
     def base(self, r: Region) -> str:
         return self.mm.unique_name(r, "_", self.ambiguous)
@@ -99,7 +138,8 @@ class _Names:
         return f"{camel(self.base(r))}Map"
 
     def type(self, r: Region) -> str:
-        return f"{self.base(r)}_map_t"
+        """Struct type of a region with children; shared by every region of its shape."""
+        return self._type_of_shape[self._shape[id(r)]]
 
 
 def _check_names(mm: MemoryMap, pkg: str, names: _Names, diags: Diagnostics) -> None:
@@ -147,15 +187,16 @@ def _check_names(mm: MemoryMap, pkg: str, names: _Names, diags: Diagnostics) -> 
                 )
             else:
                 params[name] = r
-        if r.children:
-            tname = names.type(r)
-            if tname in reserved_types or tname in types:
-                diags.error(
-                    "sv-name-clash",
-                    f"region '{r.qualname}' would generate type '{tname}', which is already used",
-                    r.at("id"),
-                )
-            types[tname] = r
+    for group in names.groups:
+        r = group[0]
+        tname = names.type(r)
+        if tname in reserved_types or tname in types:
+            diags.error(
+                "sv-name-clash",
+                f"region '{r.qualname}' would generate type '{tname}', which is already used",
+                r.at("id"),
+            )
+        types[tname] = r
 
 
 def _struct(name: str, fields: list[tuple[str, str]]) -> list[str]:
@@ -187,16 +228,7 @@ def generate(mm: MemoryMap, diags: Diagnostics, opts: TargetOptions) -> dict[Pur
     def field_value(r: Region) -> str:
         return names.map(r) if r.children else names.addr(r)
 
-    # Bottom-up (post-order) list of regions with children, in source order.
-    parents: list[Region] = []
-
-    def collect(regions: list[Region]) -> None:
-        for r in regions:
-            collect(r.children)
-            if r.children:
-                parents.append(r)
-
-    collect(mm.regions)
+    parents = names.parents
 
     source = mm.loc.path.name
     lines = [
@@ -209,7 +241,8 @@ def generate(mm: MemoryMap, diags: Diagnostics, opts: TargetOptions) -> dict[Pur
         "",
     ]
     lines += _struct("addr_rule_t", [(addr_t, "start_addr"), (addr_t, "end_addr")])
-    for p in parents:
+    for group in names.groups:  # one typedef per shape
+        p = group[0]
         fields = [(addr_t, "start_addr"), (addr_t, "end_addr"), ("int unsigned", "num")]
         fields += [(field_type(c), c.id) for c in p.children]
         lines += _struct(names.type(p), fields)
